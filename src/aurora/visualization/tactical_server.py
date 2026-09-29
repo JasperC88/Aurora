@@ -13,7 +13,20 @@ import webbrowser
 import argparse
 import json
 import logging
-from ..ingestion.adsb_exchange import LiveADSBClient
+
+# Ensure project src/ directory is on sys.path regardless of execution context
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+_src_dir = os.path.abspath(os.path.join(_current_dir, "..", ".."))
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
+
+try:
+    from aurora.ingestion.adsb_exchange import LiveADSBClient
+except ImportError:
+    try:
+        from ..ingestion.adsb_exchange import LiveADSBClient
+    except (ImportError, ValueError):
+        from src.aurora.ingestion.adsb_exchange import LiveADSBClient
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("aurora.tactical_server")
@@ -80,9 +93,13 @@ def run_server(port: int = 8050, auto_open: bool = True):
             logger.info("Server shutting down.")
 
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description="Aurora Tactical Radar Server")
     parser.add_argument("--port", type=int, default=8050, help="Local HTTP port")
     parser.add_argument("--no-open", action="store_true", help="Do not open browser automatically")
     args = parser.parse_args()
     run_server(port=args.port, auto_open=not args.no_open)
+
+
+if __name__ == "__main__":
+    main()

@@ -9,10 +9,32 @@ References:
 import urllib.request
 import json
 import logging
-from typing import Dict, Any, List, Optional
-import pandas as pd
+from typing import Dict, Any, List, Optional, Union
+
+try:
+    import pandas as pd
+    HAS_PANDAS = True
+except ImportError:
+    pd = None
+    HAS_PANDAS = False
 
 logger = logging.getLogger("aurora.ingestion.adsb_live")
+
+
+class RecordList(list):
+    """Fallback container mimicking basic DataFrame methods when pandas is not installed."""
+
+    def to_dict(self, orient: str = "records") -> List[Dict[str, Any]]:
+        return list(self)
+
+    def dropna(self, subset: Optional[List[str]] = None) -> "RecordList":
+        if not subset:
+            return self
+        filtered = [
+            row for row in self
+            if all(row.get(col) is not None for col in subset)
+        ]
+        return RecordList(filtered)
 
 
 class LiveADSBClient:
@@ -24,7 +46,7 @@ class LiveADSBClient:
         lon: float = 119.5,
         dist_nm: int = 250,
         military_only: bool = False,
-    ) -> pd.DataFrame:
+    ) -> Any:
         """
         Pulls live aircraft around a coordinate center using ADS-B Exchange / readsb v2 API.
         Default center: Taiwan Strait (23.5°N, 119.5°E, 250nm radius).
@@ -39,11 +61,11 @@ class LiveADSBClient:
                 data = json.loads(resp.read().decode("utf-8"))
         except Exception as e:
             logger.error(f"Error fetching from ADS-B Exchange endpoint: {e}")
-            return pd.DataFrame()
+            return pd.DataFrame() if HAS_PANDAS else RecordList()
 
         aircraft_list = data.get("ac", [])
         if not aircraft_list:
-            return pd.DataFrame()
+            return pd.DataFrame() if HAS_PANDAS else RecordList()
 
         rows = []
         for ac in aircraft_list:
@@ -66,10 +88,10 @@ class LiveADSBClient:
                 "timestamp_seen": ac.get("seen_pos", 0),
             })
 
-        df = pd.DataFrame(rows)
-        # Drop aircraft without valid GPS coords
-        df = df.dropna(subset=["lat", "lon"])
-        return df
+        if HAS_PANDAS:
+            df = pd.DataFrame(rows)
+            return df.dropna(subset=["lat", "lon"])
+        return RecordList(rows).dropna(subset=["lat", "lon"])
 
     @staticmethod
     def fetch_opensky_live_bbox(
@@ -77,7 +99,7 @@ class LiveADSBClient:
         max_lat: float = 26.0,
         min_lon: float = 116.0,
         max_lon: float = 124.0,
-    ) -> pd.DataFrame:
+    ) -> Any:
         """
         Pulls live aircraft within a bounding box from OpenSky Network REST API.
         """
@@ -94,11 +116,11 @@ class LiveADSBClient:
                 data = json.loads(resp.read().decode("utf-8"))
         except Exception as e:
             logger.error(f"Error fetching from OpenSky Network API: {e}")
-            return pd.DataFrame()
+            return pd.DataFrame() if HAS_PANDAS else RecordList()
 
         states = data.get("states", [])
         if not states:
-            return pd.DataFrame()
+            return pd.DataFrame() if HAS_PANDAS else RecordList()
 
         rows = []
         for s in states:
@@ -122,5 +144,8 @@ class LiveADSBClient:
                 "timestamp_seen": s[3] or s[4],
             })
 
-        df = pd.DataFrame(rows)
-        return df.dropna(subset=["lat", "lon"])
+        if HAS_PANDAS:
+            df = pd.DataFrame(rows)
+            return df.dropna(subset=["lat", "lon"])
+        return RecordList(rows).dropna(subset=["lat", "lon"])
+
