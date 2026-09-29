@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project Aurora - Tactical Volumetric Radar (ADS-B Exchange & OpenSky)</title>
+
+  <!-- Leaflet CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+  <!-- Tailwind CSS -->
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+
+  <style>
+    #map { height: 100%; width: 100%; background: #0b0f19; }
+    .aircraft-marker {
+      transition: transform 0.5s ease-out;
+    }
+    .incursion-ring {
+      animation: incursion-pulse 1.8s infinite ease-out;
+    }
+    @keyframes incursion-pulse {
+      0% { stroke-width: 1; stroke-opacity: 1; r: 12; }
+      100% { stroke-width: 6; stroke-opacity: 0; r: 35; }
+    }
+    /* Custom Leaflet popup dark styling */
+    .leaflet-popup-content-wrapper {
+      background: #0f172a !important;
+      color: #f8fafc !important;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+    .leaflet-popup-tip {
+      background: #0f172a !important;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 flex flex-col h-screen overflow-hidden font-sans">
+
+  <!-- Top Navigation & Tactical Control Bar -->
+  <header class="bg-slate-900/90 backdrop-blur border-b border-slate-800 px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 z-[1000]">
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
+        <span class="w-3 h-3 rounded-full bg-emerald-500 animate-pulse"></span>
+        <h1 class="text-base font-bold text-white tracking-wide flex items-center gap-2">
+          PROJECT AURORA <span class="text-xs px-2 py-0.5 rounded bg-sky-500/20 text-sky-400 font-mono border border-sky-500/30">TACTICAL RADAR</span>
+        </h1>
+      </div>
+      <span class="text-slate-500 hidden sm:inline">|</span>
+      <p class="text-xs text-slate-400 hidden md:inline">Real Map Volumetric Telemetry &bull; ADS-B Exchange &amp; OpenSky</p>
+    </div>
+
+    <!-- Controls -->
+    <div class="flex items-center gap-2.5">
+      <!-- Theater Switch -->
+      <select id="theaterSelect" class="bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1.5 text-slate-200 focus:ring-1 focus:ring-sky-500 focus:outline-none">
+        <option value="TAIWAN">Theater: Taiwan Strait &amp; ADIZ</option>
+        <option value="GIUK">Theater: GIUK Gap (North Atlantic)</option>
+      </select>
+
+      <!-- Data Source Switch -->
+      <select id="sourceSelect" class="bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1.5 text-slate-200 focus:ring-1 focus:ring-sky-500 focus:outline-none">
+        <option value="adsb">Source: ADS-B Exchange Live</option>
+        <option value="opensky">Source: OpenSky Network API</option>
+        <option value="synthetic">Source: Historical Incursion Sample</option>
+      </select>
+
+      <!-- Military Filter Button (Matches ADS-B Exchange 'U' toggle) -->
+      <button id="milToggleBtn" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors text-slate-300">
+        <span class="w-2 h-2 rounded-full bg-slate-500" id="milIndicator"></span>
+        <span>Mil Only</span>
+      </button>
+
+      <!-- Refresh Rate / Live Button -->
+      <button id="refreshBtn" class="bg-sky-600 hover:bg-sky-500 text-white font-medium text-xs px-3 py-1.5 rounded-lg flex items-center gap-1 transition-colors">
+        <span id="refreshIcon">🔄</span> <span id="refreshLabel">Fetch Live</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Body: Map Canvas & Sidebar -->
+  <div class="flex-1 flex overflow-hidden relative">
+
+    <!-- Leaflet Slippy Map -->
+    <div id="map" class="flex-1 z-0"></div>
+
+    <!-- Tactical HUD Floating Overlay (Top-Left on Map) -->
+    <div class="absolute top-4 left-4 z-[999] bg-slate-900/90 backdrop-blur border border-slate-800 rounded-xl p-3.5 shadow-xl text-xs space-y-2 pointer-events-auto max-w-xs">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+        <span class="font-bold text-slate-200 tracking-wider text-[11px] uppercase">Telemetry Status</span>
+        <span id="feedStatusBadge" class="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400 font-mono">LIVE_STREAM</span>
+      </div>
+      <div class="grid grid-cols-2 gap-2 font-mono">
+        <div>
+          <div class="text-[10px] text-slate-500">AIRCRAFT TRACKED</div>
+          <div id="hudTrackCount" class="text-lg font-bold text-sky-400">0</div>
+        </div>
+        <div>
+          <div class="text-[10px] text-slate-500">ADIZ INCURSIONS</div>
+          <div id="hudIncursionCount" class="text-lg font-bold text-rose-400">0</div>
+        </div>
+      </div>
+      <div class="pt-1 text-[11px] text-slate-400 border-t border-slate-800 space-y-1">
+        <div class="flex justify-between"><span>Memory Ceiling:</span> <span class="text-emerald-400 font-mono">&le; 512 MB</span></div>
+        <div class="flex justify-between"><span>Last Ingestion:</span> <span id="hudLastFetch" class="font-mono text-slate-300">Just now</span></div>
+      </div>
+    </div>
+
+    <!-- Altitude Stratum Legend (Bottom-Left on Map) -->
+    <div class="absolute bottom-6 left-4 z-[999] bg-slate-900/85 backdrop-blur border border-slate-800 rounded-lg p-2.5 text-[11px] shadow-lg pointer-events-auto font-mono">
+      <div class="text-slate-400 font-sans text-[10px] uppercase font-semibold mb-1">Altitude Strata (FL)</div>
+      <div class="flex items-center gap-1.5">
+        <span class="w-3 h-3 rounded" style="background: #38bdf8;"></span> <span>&lt; 10k ft</span>
+        <span class="w-3 h-3 rounded ml-2" style="background: #34d399;"></span> <span>10-25k</span>
+        <span class="w-3 h-3 rounded ml-2" style="background: #fbbf24;"></span> <span>25-38k</span>
+        <span class="w-3 h-3 rounded ml-2" style="background: #f87171;"></span> <span>&gt; 38k ft</span>
+      </div>
+    </div>
+
+    <!-- Right Side Drawer: Incursions & Selected Aircraft Inspection -->
+    <div class="w-80 md:w-96 bg-slate-900 border-l border-slate-800 flex flex-col z-[999] shadow-2xl">
+      <!-- Panel Header -->
+      <div class="p-3 border-b border-slate-800 flex items-center justify-between">
+        <h2 class="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+          <span>Boundary Intersections</span>
+          <span id="panelBadge" class="bg-rose-500/20 text-rose-400 border border-rose-500/30 text-[10px] px-1.5 py-0.5 rounded-full font-mono">0 active</span>
+        </h2>
+        <span class="text-[10px] text-slate-500 font-mono">Elden Volumetric Analysis</span>
+      </div>
+
+      <!-- Incursions List -->
+      <div class="flex-1 overflow-y-auto divide-y divide-slate-800 text-xs" id="incursionList">
+        <div class="p-6 text-center text-slate-500 text-xs">
+          Scanning airspace for boundary-probing incursions...
+        </div>
+      </div>
+
+      <!-- Aircraft Inspector Details -->
+      <div class="p-3 border-t border-slate-800 bg-slate-950/80" id="selectedInspector">
+        <div class="text-[11px] text-slate-400 uppercase font-semibold mb-1">Target Inspection</div>
+        <div id="inspectorContent" class="text-xs text-slate-500 font-mono">
+          Click any aircraft on the map to inspect volumetric telemetry.
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // --- GeoJSON Boundaries ---
+    const BOUNDARIES = {
+      taiwanADIZ: {
+        type: "Feature",
+        properties: { name: "Taiwan ADIZ (Official Boundary)" },
+        geometry: {
+          type: "Polygon",
+          coordinates: [[
+            [117.5, 21.0], [121.5, 21.0], [123.0, 22.5], [123.0, 29.0],
+            [121.5, 29.0], [117.5, 26.5], [117.5, 21.0]
+          ]]
+        }
+      },
+      taiwanADIZ_SW: {
+        type: "Feature",
+        properties: { name: "Taiwan ADIZ - Southwest Sector (High Activity)" },
+        geometry: {
+          type: "Polygon",
+          coordinates: [[
+            [117.5, 21.0], [120.0, 21.0], [120.5, 22.5], [119.0, 23.5], [117.5, 22.5], [117.5, 21.0]
+          ]]
+        }
+      },
+      medianLine: {
+        type: "Feature",
+        properties: { name: "Taiwan Strait Median Line" },
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            [119.28, 23.0], [119.68, 23.6], [120.25, 24.3], [121.0, 25.3], [121.5, 26.0]
+          ]
+        }
+      },
+      giukGap: {
+        type: "Feature",
+        properties: { name: "GIUK Gap Chokepoint" },
+        geometry: {
+          type: "Polygon",
+          coordinates: [[
+            [-25.0, 60.0], [-10.0, 58.0], [-5.0, 62.0], [-18.0, 66.5], [-30.0, 65.0], [-25.0, 60.0]
+          ]]
+        }
+      }
+    };
+
+    // --- State ---
+    const state = {
+      theater: "TAIWAN",
+      source: "adsb",
+      milOnly: false,
+      autoRefresh: true,
+      refreshInterval: 12000, // 12 seconds
+      timerId: null,
+      aircraft: {},
+      markers: {},
+      incursions: {}
+    };
+
+    // --- Initialize Leaflet Map ---
+    const map = L.map("map", {
+      center: [23.5, 119.5],
+      zoom: 7,
+      zoomControl: true,
+      attributionControl: false
+    });
+
+    // Dark Matter Tactical Basemap (CartoDB)
+    const cartoDark = L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+      maxZoom: 19,
+      subdomains: "abcd"
+    }).addTo(map);
+
+    // Attribution
+    L.control.attribution({ position: "bottomright" })
+      .addAttribution('&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://openstreetmap.org">OSM</a> | OpenSky &bull; ADS-B Exchange')
+      .addTo(map);
+
+    // Layer Groups
+    const boundaryLayer = L.layerGroup().addTo(map);
+    const aircraftLayer = L.layerGroup().addTo(map);
+
+    // Render Boundaries
+    function renderBoundaries() {
+      boundaryLayer.clearLayers();
+
+      if (state.theater === "TAIWAN") {
+        // Full ADIZ
+        L.geoJSON(BOUNDARIES.taiwanADIZ, {
+          style: { color: "#64748b", weight: 1.5, dashArray: "5, 5", fillOpacity: 0.03, fillColor: "#38bdf8" }
+        }).bindTooltip("Taiwan ADIZ Outer Demarcation", { sticky: true }).addTo(boundaryLayer);
+
+        // SW Sector (Critical Incursion Zone)
+        L.geoJSON(BOUNDARIES.taiwanADIZ_SW, {
+          style: { color: "#f43f5e", weight: 2, fillOpacity: 0.15, fillColor: "#f43f5e" }
+        }).bindTooltip("SW Sector (Contested Volume)", { sticky: true }).addTo(boundaryLayer);
+
+        // Median Line
+        L.geoJSON(BOUNDARIES.medianLine, {
+          style: { color: "#fbbf24", weight: 2, dashArray: "6, 6" }
+        }).bindTooltip("Taiwan Strait Median Line", { sticky: true }).addTo(boundaryLayer);
+
+        map.setView([23.5, 119.5], 7);
+      } else {
+        // GIUK Gap
+        L.geoJSON(BOUNDARIES.giukGap, {
+          style: { color: "#38bdf8", weight: 2, fillOpacity: 0.12, fillColor: "#38bdf8" }
+        }).bindTooltip("GIUK Gap Surveillance Corridor", { sticky: true }).addTo(boundaryLayer);
+
+        map.setView([63.0, -18.0], 5);
+      }
+    }
+
+    // Point in Polygon algorithm
+    function pointInPolygon(point, vs) {
+      const x = point[0], y = point[1];
+      let inside = false;
+      for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
+        const xi = vs[i][0], yi = vs[i][1];
+        const xj = vs[j][0], yj = vs[j][1];
+        const intersect = ((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+        if (intersect) inside = !inside;
+      }
+      return inside;
+    }
+
+    // Altitude color mapping
+    function getAltitudeColor(altFt) {
+      if (altFt < 10000) return "#38bdf8"; // sky blue
+      if (altFt < 25000) return "#34d399"; // emerald
+      if (altFt < 38000) return "#fbbf24"; // amber
+      return "#f87171"; // rose / red
+    }
+
+    // SVG Aircraft Icon Generator
+    function createAircraftIcon(heading, altFt, isIncursion) {
+      const color = isIncursion ? "#ef4444" : getAltitudeColor(altFt);
+      const svg = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" style="transform: rotate(${heading || 0}deg);">
+          ${isIncursion ? `<circle cx="12" cy="12" r="10" fill="none" stroke="#ef4444" class="incursion-ring"/>` : ''}
+          <path d="M12 2L14 9L21 11L21 13L14 13L13 21L11 22L11.5 13L4 13L4 11L11 9L12 2Z" fill="${color}" stroke="#0f172a" stroke-width="0.8"/>
+        </svg>
+      `;
+      return L.divIcon({
+        html: svg,
+        className: "aircraft-marker",
+        iconSize: [28, 28],
+        iconAnchor: [14, 14]
+      });
+    }
+
+    // Fetch Live Telemetry Data
+    async function fetchTelemetry() {
+      const icon = document.getElementById("refreshIcon");
+      icon.classList.add("animate-spin");
+      document.getElementById("feedStatusBadge").innerText = "FETCHING...";
+
+      try {
+        let list = [];
+
+        if (state.source === "adsb") {
+          // Pull from ADS-B Exchange readsb open API
+          const lat = state.theater === "TAIWAN" ? 23.5 : 63.0;
+          const lon = state.theater === "TAIWAN" ? 119.5 : -18.0;
+          const dist = state.theater === "TAIWAN" ? 250 : 400;
+          const url = `https://api.adsb.lol/v2/lat/${lat}/lon/${lon}/dist/${dist}`;
+          
+          const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+          const data = await resp.json();
+          const ac = data.ac || [];
+
+          list = ac.map(a => {
+            const isMil = Boolean((a.dbFlags & 1) || a.military);
+            return {
+              hex: a.hex,
+              flight: (a.flight || a.hex).trim(),
+              lat: a.lat,
+              lon: a.lon,
+              alt: a.alt_baro || a.alt_geom || 0,
+              speed: a.gs || 0,
+              track: a.track || 0,
+              type: a.t || "Unknown",
+              reg: a.r || "",
+              isMil: isMil,
+              squawk: a.squawk || "---"
+            };
+          });
+        } else if (state.source === "opensky") {
+          // Pull from OpenSky REST API
+          const bbox = state.theater === "TAIWAN" 
+            ? "lamin=20.0&lamax=26.0&lomin=116.0&lomax=124.0"
+            : "lamin=58.0&lamax=68.0&lomin=-30.0&lomax=-5.0";
+          const url = `https://opensky-network.org/api/states/all?${bbox}`;
+          
+          const resp = await fetch(url);
+          const data = await resp.json();
+          const states = data.states || [];
+
+          list = states.map(s => ({
+            hex: s[0],
+            flight: (s[1] || s[0]).trim(),
+            country: s[2],
+            lon: s[5],
+            lat: s[6],
+            alt: Math.round((s[7] || 0) * 3.28084),
+            speed: Math.round((s[9] || 0) * 1.94384),
+            track: s[10] || 0,
+            type: "OpenSky Live",
+            reg: "",
+            isMil: false,
+            squawk: s[14] || "---"
+          }));
+        } else {
+          // Synthetic / Historical sample
+          list = [
+            { hex: "78019A", flight: "KJ500", lat: 21.9, lon: 118.8, alt: 24000, speed: 380, track: 115, type: "AEW&C", reg: "PLA-AF", isMil: true, squawk: "7700" },
+            { hex: "78024C", flight: "Y8-ASW", lat: 22.3, lon: 119.2, alt: 14000, speed: 290, track: 240, type: "ASW Patrol", reg: "PLA-PLAN", isMil: true, squawk: "5201" },
+            { hex: "400A1B", flight: "CAL006", lat: 24.8, lon: 121.8, alt: 36000, speed: 460, track: 45, type: "B77W", reg: "B-18007", isMil: false, squawk: "1200" }
+          ];
+        }
+
+        updateMap(list);
+        document.getElementById("feedStatusBadge").innerText = "LIVE_STREAM";
+        document.getElementById("hudLastFetch").innerText = new Date().toLocaleTimeString();
+      } catch (err) {
+        console.error("Telemetry fetch error:", err);
+        document.getElementById("feedStatusBadge").innerText = "RETRYING...";
+      } finally {
+        icon.classList.remove("animate-spin");
+      }
+    }
+
+    // Process and Render Aircraft Markers
+    function updateMap(aircraftList) {
+      const activeHexes = new Set();
+      const incursionTargetPoly = state.theater === "TAIWAN" 
+        ? BOUNDARIES.taiwanADIZ_SW.geometry.coordinates[0] 
+        : BOUNDARIES.giukGap.geometry.coordinates[0];
+
+      let incursionCount = 0;
+      const incursionEntries = [];
+
+      aircraftList.forEach(ac => {
+        if (!ac.lat || !ac.lon) return;
+        if (state.milOnly && !ac.isMil) return;
+
+        activeHexes.add(ac.hex);
+
+        // Volumetric Point-in-Polygon check
+        const isIncursion = pointInPolygon([ac.lon, ac.lat], incursionTargetPoly);
+        if (isIncursion) {
+          incursionCount++;
+          incursionEntries.push(ac);
+        }
+
+        // Marker update or creation
+        if (state.markers[ac.hex]) {
+          const marker = state.markers[ac.hex];
+          marker.setLatLng([ac.lat, ac.lon]);
+          marker.setIcon(createAircraftIcon(ac.track, ac.alt, isIncursion));
+        } else {
+          const marker = L.marker([ac.lat, ac.lon], {
+            icon: createAircraftIcon(ac.track, ac.alt, isIncursion)
+          }).addTo(aircraftLayer);
+
+          marker.on("click", () => inspectAircraft(ac, isIncursion));
+          marker.bindTooltip(`<b>${ac.flight}</b> &bull; FL${Math.round(ac.alt/100)}`, {
+            direction: "top",
+            offset: [0, -10]
+          });
+
+          state.markers[ac.hex] = marker;
+        }
+      });
+
+      // Cleanup stale markers
+      Object.keys(state.markers).forEach(hex => {
+        if (!activeHexes.has(hex)) {
+          aircraftLayer.removeLayer(state.markers[hex]);
+          delete state.markers[hex];
+        }
+      });
+
+      // Update HUD & Drawer
+      document.getElementById("hudTrackCount").innerText = activeHexes.size;
+      document.getElementById("hudIncursionCount").innerText = incursionCount;
+      document.getElementById("panelBadge").innerText = `${incursionCount} active`;
+
+      renderIncursionsDrawer(incursionEntries);
+    }
+
+    // Incursions Drawer Renderer
+    function renderIncursionsDrawer(incursions) {
+      const listEl = document.getElementById("incursionList");
+      if (incursions.length === 0) {
+        listEl.innerHTML = `
+          <div class="p-6 text-center text-slate-500 text-xs">
+            No volumetric boundary incursions detected in current scan.
+          </div>
+        `;
+        return;
+      }
+
+      listEl.innerHTML = incursions.map(ac => `
+        <div class="p-3 hover:bg-slate-800/60 cursor-pointer transition-colors" onclick='zoomToAircraft(${ac.lat}, ${ac.lon}, "${ac.hex}")'>
+          <div class="flex items-center justify-between">
+            <span class="font-bold text-rose-400 font-mono text-sm">${ac.flight}</span>
+            <span class="px-1.5 py-0.5 rounded text-[10px] bg-rose-500/20 text-rose-300 font-mono">INCURSION</span>
+          </div>
+          <div class="grid grid-cols-2 gap-1 text-[11px] text-slate-400 mt-1 font-mono">
+            <div>ALT: <span class="text-slate-200">${ac.alt.toLocaleString()} ft</span></div>
+            <div>SPD: <span class="text-slate-200">${ac.speed} kts</span></div>
+            <div>HDG: <span class="text-slate-200">${ac.track}&deg;</span></div>
+            <div>HEX: <span class="text-slate-200">${ac.hex.toUpperCase()}</span></div>
+          </div>
+          ${ac.isMil ? '<div class="mt-1 text-[10px] text-amber-400 font-bold uppercase">⚠ Military Airframe</div>' : ''}
+        </div>
+      `).join("");
+    }
+
+    // Inspector
+    function inspectAircraft(ac, isIncursion) {
+      const content = document.getElementById("inspectorContent");
+      content.innerHTML = `
+        <div class="space-y-1.5">
+          <div class="flex justify-between items-center text-sm font-bold text-white">
+            <span>${ac.flight}</span>
+            <span class="text-xs px-2 py-0.5 rounded ${isIncursion ? 'bg-rose-500/20 text-rose-400' : 'bg-sky-500/20 text-sky-400'}">
+              ${isIncursion ? 'SECTOR INCURSION' : 'NORMAL TRANSIT'}
+            </span>
+          </div>
+          <div class="grid grid-cols-2 gap-2 text-[11px]">
+            <div><span class="text-slate-500">ICAO:</span> <span class="text-slate-200">${ac.hex.toUpperCase()}</span></div>
+            <div><span class="text-slate-500">TYPE:</span> <span class="text-slate-200">${ac.type}</span></div>
+            <div><span class="text-slate-500">ALTITUDE:</span> <span class="text-slate-200">${ac.alt.toLocaleString()} ft</span></div>
+            <div><span class="text-slate-500">SPEED:</span> <span class="text-slate-200">${ac.speed} kts</span></div>
+            <div><span class="text-slate-500">TRACK:</span> <span class="text-slate-200">${ac.track}&deg;</span></div>
+            <div><span class="text-slate-500">SQUAWK:</span> <span class="text-slate-200">${ac.squawk}</span></div>
+          </div>
+        </div>
+      `;
+    }
+
+    function zoomToAircraft(lat, lon, hex) {
+      map.setView([lat, lon], 9);
+      if (state.markers[hex]) {
+        state.markers[hex].openTooltip();
+      }
+    }
+
+    // UI Event Listeners
+    document.getElementById("theaterSelect").addEventListener("change", (e) => {
+      state.theater = e.target.value;
+      renderBoundaries();
+      fetchTelemetry();
+    });
+
+    document.getElementById("sourceSelect").addEventListener("change", (e) => {
+      state.source = e.target.value;
+      fetchTelemetry();
+    });
+
+    document.getElementById("milToggleBtn").addEventListener("click", () => {
+      state.milOnly = !state.milOnly;
+      const ind = document.getElementById("milIndicator");
+      ind.className = `w-2 h-2 rounded-full ${state.milOnly ? 'bg-amber-400 animate-pulse' : 'bg-slate-500'}`;
+      fetchTelemetry();
+    });
+
+    document.getElementById("refreshBtn").addEventListener("click", fetchTelemetry);
+
+    // Initial Load
+    renderBoundaries();
+    fetchTelemetry();
+
+    // Auto-polling loop
+    setInterval(fetchTelemetry, state.refreshInterval);
+  </script>
+</body>
+</html>
