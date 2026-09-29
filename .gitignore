@@ -1,0 +1,52 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Secrets and Local Environment
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+
+# Large Telemetry & Geospatial Data
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+
+# Exclude massive telemetry files even if placed in other dirs
+*.parquet
+*.feather
+*.h5
+*.hdf5
+*.csv.gz
+*.tar.gz
+*.zip
+
+# HPC Eddie Job Logs (Sun Grid Engine / Slurm)
+cluster/logs/
+*.o[0-9]*
+*.e[0-9]*
+*.pe[0-9]*
+*.po[0-9]*

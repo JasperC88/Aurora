@@ -1,0 +1,21 @@
+# Core Spatial and Data Science
+pandas>=2.0.0
+geopandas>=0.14.0
+shapely>=2.0.0
+pyarrow>=14.0.0
+dask[dataframe]>=2024.1.0
+
+# Query Engine and Ingestion
+trino>=0.328.0
+
+# Visualization & Cartography
+keplergl>=0.3.2
+
+# Computational Monitoring & Utilities
+psutil>=5.9.0
+scipy>=1.11.0
+
+# Development, Testing, and Quality Assurance
+pytest>=8.0.0
+ruff>=0.3.0
+black>=24.0.0
