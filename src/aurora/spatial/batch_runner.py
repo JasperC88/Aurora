@@ -94,6 +94,12 @@ def run_pipeline(
         events_output = output_path.replace(".parquet", "_events.csv").replace(".csv", "_events.csv")
         events.to_csv(events_output, index=False)
         logger.info(f"Saved results to {output_path} and {events_output}")
+
+        # Automatically export live visualizer dashboard
+        from ..visualization.live_monitor import generate_monitor_html
+        html_out = output_path.replace(".parquet", ".html").replace(".csv", ".html")
+        generate_monitor_html(combined, output_html_path=html_out)
+        logger.info(f"Generated interactive visualizer at: {html_out}")
     else:
         logger.info("No spatial intersections detected in target regions.")
 
