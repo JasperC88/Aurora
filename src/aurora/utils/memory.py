@@ -1,17 +1,26 @@
 import gc
 import os
-import psutil
+import sys
 import logging
 from functools import wraps
 from typing import Callable, Any
 
 logger = logging.getLogger("aurora.memory")
 
-
-def get_current_memory_mb() -> float:
-    """Return the current resident set size (RSS) in megabytes."""
-    process = psutil.Process(os.getpid())
-    return process.memory_info().rss / (1024 * 1024)
+try:
+    import psutil
+    def get_current_memory_mb() -> float:
+        """Return the current resident set size (RSS) in megabytes using psutil."""
+        process = psutil.Process(os.getpid())
+        return process.memory_info().rss / (1024 * 1024)
+except ImportError:
+    import resource
+    def get_current_memory_mb() -> float:
+        """Return the current resident set size (RSS) in megabytes using resource."""
+        usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if sys.platform == "darwin":
+            return usage / (1024 * 1024)
+        return usage / 1024.0
 
 
 class MemoryGuard:
