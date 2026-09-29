@@ -61,6 +61,50 @@ class TacticalRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json_response({"ac": data})
             return
 
+        elif self.path.startswith("/arcgis/features/live"):
+            # Serve live aircraft as ArcGIS-ready 3D Point GeoJSON FeatureCollection
+            df = LiveADSBClient.fetch_adsb_exchange_radius(lat=23.5, lon=119.5, dist_nm=250)
+            features = []
+            for ac in df:
+                if ac.get("lat") and ac.get("lon"):
+                    alt_m = round(float(ac.get("altitude_ft", 0)) * 0.3048, 1)
+                    features.append({
+                        "type": "Feature",
+                        "geometry": {
+                            "type": "Point",
+                            "coordinates": [float(ac["lon"]), float(ac["lat"]), alt_m]
+                        },
+                        "properties": {
+                            "Flight": ac.get("flight", "UNK"),
+                            "Hex": str(ac.get("hex", "")).upper(),
+                            "Type": ac.get("aircraft_type", "UNK"),
+                            "Altitude_ft": ac.get("altitude_ft", 0),
+                            "Velocity_kts": ac.get("velocity_kts", 0),
+                            "Heading_deg": ac.get("track_deg", 0),
+                            "IsMilitary": ac.get("is_military", False),
+                            "Squawk": ac.get("squawk", "")
+                        }
+                    })
+            self.send_json_response({
+                "type": "FeatureCollection",
+                "name": "Live_Airspace_Telemetry",
+                "features": features
+            })
+            return
+
+        elif self.path.startswith("/arcgis/features/adiz"):
+            # Serve 3D volumetric boundaries for ArcGIS Pro extrusion
+            config_path = os.path.join(
+                os.path.dirname(__file__), "..", "..", "..", "config", "regions.geojson"
+            )
+            from .arcgis_export import export_adiz_arcgis_extrusions
+            temp_out = os.path.join(os.path.dirname(__file__), "..", "..", "..", "data", "processed", "temp_adiz.geojson")
+            export_adiz_arcgis_extrusions(regions_path=config_path, output_path=temp_out)
+            with open(temp_out, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.send_json_response(data)
+            return
+
         return super().do_GET()
 
     def send_json_response(self, obj):
